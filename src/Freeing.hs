@@ -18,13 +18,26 @@ class Monad m => MonadConsole m where
   tell :: String -> m ()
   ask :: m String
 
-newtype Command1 m a = Command1 {
-  unCommand1 :: FreeT CountF m a
+newtype CountCommand m a = CountCommand {
+  unCountCommand :: FreeT CountF m a
 } deriving (Functor, Applicative, Monad)
 
-runCommand1 :: Monad m => (CountF (m a) -> m a) -> Command1 m a -> m a
-runCommand1 countAlg command = iterT countAlg $ unCommand1 command
+runCountCommand :: Monad m => (CountF (m a) -> m a) -> CountCommand m a -> m a
+runCountCommand countAlg command = iterT countAlg $ unCountCommand command
 
-instance Monad m => MonadCount (Command1 m) where
-  inc = Command1 (liftF (Inc ()))
-  get = Command1 (liftF (Get id))
+instance Monad m => MonadCount (CountCommand m) where
+  inc = CountCommand (liftF (Inc ()))
+  get = CountCommand (liftF (Get id))
+
+newtype ConsoleCommand m a = ConsoleCommand {
+  unConsoleCommand :: FreeT ConsoleF m a
+} deriving (Functor, Applicative, Monad)
+
+runConsoleCommand :: Monad m => (ConsoleF (m a) -> m a) -> ConsoleCommand m a -> m a
+runConsoleCommand consoleAlg command = iterT consoleAlg $ unConsoleCommand command
+
+instance Monad m => MonadConsole (ConsoleCommand m) where
+  tell s = ConsoleCommand (liftF (Tell s ()))
+  ask = ConsoleCommand (liftF (Ask id))
+
+

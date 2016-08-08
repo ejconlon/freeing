@@ -1,0 +1,8 @@
+.stack-work/
+*.swo
+*.swp
+*.log
+*.bak
+*.tmp
+*~
+

@@ -1,8 +1,10 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Freeing where
 
+import Control.Monad.Trans.Class
 import Control.Monad.Trans.Free
 import Data.Functor.Sum
 
@@ -40,4 +42,35 @@ instance Monad m => MonadConsole (ConsoleCommand m) where
   tell s = ConsoleCommand (liftF (Tell s ()))
   ask = ConsoleCommand (liftF (Ask id))
 
+sumAlgebra :: (f a -> a) -> (g a -> a) -> (Sum f g a -> a)
+sumAlgebra fAlg _ (InL fa) = fAlg fa
+sumAlgebra _ gAlg (InR ga) = gAlg ga
 
+newtype SF a = SF { unSF :: Sum CountF ConsoleF a } deriving (Functor)
+
+type SFAlgebra a = SF a -> a
+
+newtype Command m a = Command {
+  unCommand :: FreeT SF m a
+} deriving (Functor, Applicative, Monad, MonadTrans)
+
+runCommand :: Monad m => SFAlgebra (m a) -> Command m a -> m a
+runCommand algebra command = iterT algebra $ unCommand command
+
+instance Monad m => MonadCount (Command m) where
+  inc = Command (liftF (SF (InL (Inc ()))))
+  get = Command (liftF (SF (InL (Get id))))
+
+instance Monad m => MonadConsole (Command m) where
+  tell s = Command (liftF (SF (InR (Tell s ()))))
+  ask = Command (liftF (SF (InR (Ask id))))
+
+example :: Monad m => Command m ()
+example = do
+  tell "guess the number"
+  inc
+  guess <- ask
+  actual <- get
+  if (read guess) == actual
+    then tell "right!"
+    else tell $ "wrong, it was " ++ show actual

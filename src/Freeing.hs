@@ -70,25 +70,19 @@ instance Monad m => MonadConsole (ConsoleCommand m) where
 
 newtype SF a = SF { unSF :: Sum CountF ConsoleF a } deriving (Functor)
 
-getCountF :: SF a -> Maybe (CountF a)
-getCountF (SF (InL f)) = Just f
-getCountF _ = Nothing
-
-setCountF :: CountF a -> SF a
-setCountF = SF . InL
-
 _CountF :: Prism' (SF a) (CountF a)
 _CountF = prism' setCountF getCountF
-
-getConsoleF :: SF a -> Maybe (ConsoleF a)
-getConsoleF (SF (InR f)) = Just f
-getConsoleF _ = Nothing
-
-setConsoleF :: ConsoleF a -> SF a
-setConsoleF = SF . InR
+  where
+    setCountF = SF . InL
+    getCountF (SF (InL f)) = Just f
+    getCountF _ = Nothing
 
 _ConsoleF :: Prism' (SF a) (ConsoleF a)
 _ConsoleF = prism' setConsoleF getConsoleF
+  where
+    setConsoleF = SF . InR
+    getConsoleF (SF (InR f)) = Just f
+    getConsoleF _ = Nothing
 
 data SFTrans m = SFTrans
   { _sfTransCount :: NatTrans CountF m
@@ -96,7 +90,7 @@ data SFTrans m = SFTrans
   }
 
 -- Be careful you really match a completely with this
--- Gabriel Gonzalez has `total` lib that does, but I couldn't get it to work
+-- the `total` lib does this, but I couldn't get it to work
 total :: [(a -> Maybe b)] -> a -> b
 total [] _ = error "non-exhaustive"
 total (f:fs) a =
@@ -107,8 +101,8 @@ total (f:fs) a =
 mkSFNatTrans :: SFTrans m -> NatTrans SF m
 mkSFNatTrans (SFTrans count console) =
   total
-    [ \f -> count <$> getCountF f
-    , \f -> console <$> getConsoleF f
+    [ \f -> count <$> preview _CountF f
+    , \f -> console <$> preview _ConsoleF f
     ]
 
 newtype Command m a = Command {
@@ -118,13 +112,16 @@ newtype Command m a = Command {
 runCommand :: Monad m => NatTrans SF m -> Command m a -> m a
 runCommand nt command = iterNT nt $ unCommand command
 
+setSF :: Monad m => SF a -> Command m a
+setSF = Command . liftF
+
 instance Monad m => MonadCount (Command m) where
-  incCount = Command (liftF (setCountF (IncCount ())))
-  getCount = Command (liftF (setCountF (GetCount id)))
+  incCount = setSF . review _CountF  $ IncCount ()
+  getCount = setSF . review _CountF $ GetCount id
 
 instance Monad m => MonadConsole (Command m) where
-  tellConsole s = Command (liftF (setConsoleF (TellConsole s ())))
-  askConsole = Command (liftF (setConsoleF (AskConsole id)))
+  tellConsole s = setSF . review _ConsoleF $ TellConsole s ()
+  askConsole = setSF . review _ConsoleF $ AskConsole id
 
 -- An example of interleaving the two Functors
 

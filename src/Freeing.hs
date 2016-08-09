@@ -2,9 +2,11 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Freeing where
 
+import Control.Lens
 import Control.Monad (join)
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Class
@@ -15,14 +17,6 @@ import Data.Functor.Sum
 
 type Algebra f a = f a -> a
 type NatTrans f m = forall a. f a -> m a
-
-sumAlgebra :: Algebra f a -> Algebra g a -> Algebra (Sum f g) a
-sumAlgebra fAlg _ (InL fa) = fAlg fa
-sumAlgebra _ gAlg (InR ga) = gAlg ga
-
-sumNatTrans :: NatTrans f m -> NatTrans g m -> NatTrans (Sum f g) m
-sumNatTrans fNT _ (InL fa) = fNT fa
-sumNatTrans _ gNT (InR ga) = gNT ga
 
 natTransAlgebra :: Monad m => NatTrans f m -> Algebra f (m a)
 natTransAlgebra nt fma = join $ nt fma
@@ -76,6 +70,47 @@ instance Monad m => MonadConsole (ConsoleCommand m) where
 
 newtype SF a = SF { unSF :: Sum CountF ConsoleF a } deriving (Functor)
 
+getCountF :: SF a -> Maybe (CountF a)
+getCountF (SF (InL f)) = Just f
+getCountF _ = Nothing
+
+setCountF :: CountF a -> SF a
+setCountF = SF . InL
+
+_CountF :: Prism' (SF a) (CountF a)
+_CountF = prism' setCountF getCountF
+
+getConsoleF :: SF a -> Maybe (ConsoleF a)
+getConsoleF (SF (InR f)) = Just f
+getConsoleF _ = Nothing
+
+setConsoleF :: ConsoleF a -> SF a
+setConsoleF = SF . InR
+
+_ConsoleF :: Prism' (SF a) (ConsoleF a)
+_ConsoleF = prism' setConsoleF getConsoleF
+
+data SFTrans m = SFTrans
+  { _sfTransCount :: NatTrans CountF m
+  , _sfTransConsole :: NatTrans ConsoleF m
+  }
+
+-- Be careful you really match a completely with this
+-- Gabriel Gonzalez has `total` lib that does, but I couldn't get it to work
+total :: [(a -> Maybe b)] -> a -> b
+total [] _ = error "non-exhaustive"
+total (f:fs) a =
+  case f a of
+    Nothing -> total fs a
+    Just b -> b
+
+mkSFNatTrans :: SFTrans m -> NatTrans SF m
+mkSFNatTrans (SFTrans count console) =
+  total
+    [ \f -> count <$> getCountF f
+    , \f -> console <$> getConsoleF f
+    ]
+
 newtype Command m a = Command {
   unCommand :: FreeT SF m a
 } deriving (Functor, Applicative, Monad, MonadTrans)
@@ -84,12 +119,12 @@ runCommand :: Monad m => NatTrans SF m -> Command m a -> m a
 runCommand nt command = iterNT nt $ unCommand command
 
 instance Monad m => MonadCount (Command m) where
-  incCount = Command (liftF (SF (InL (IncCount ()))))
-  getCount = Command (liftF (SF (InL (GetCount id))))
+  incCount = Command (liftF (setCountF (IncCount ())))
+  getCount = Command (liftF (setCountF (GetCount id)))
 
 instance Monad m => MonadConsole (Command m) where
-  tellConsole s = Command (liftF (SF (InR (TellConsole s ()))))
-  askConsole = Command (liftF (SF (InR (AskConsole id))))
+  tellConsole s = Command (liftF (setConsoleF (TellConsole s ())))
+  askConsole = Command (liftF (setConsoleF (AskConsole id)))
 
 -- An example of interleaving the two Functors
 
@@ -122,12 +157,11 @@ consoleConcrete (TellConsole s a) = Concrete $ do
   return a
 consoleConcrete (AskConsole f) = Concrete $ f <$> (liftIO getLine)
 
+vConcrete :: SFTrans Concrete
+vConcrete = SFTrans countConcrete consoleConcrete
+
 sfConcrete :: NatTrans SF Concrete
-sfConcrete = (sumNatTrans countConcrete consoleConcrete) . unSF
+sfConcrete = mkSFNatTrans vConcrete
 
 runExample :: IO ()
 runExample = runStateT (unConcrete (runCommand sfConcrete example)) 0 >> return ()
-
--- TODO
--- 1) Lift functors into the free functor using optics/traversal.
--- 2) Build natural transformations using optics/traversal.
